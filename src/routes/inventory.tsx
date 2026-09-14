@@ -22,6 +22,7 @@ export const Route = createFileRoute("/inventory")({ component: InventoryPage })
 function InventoryPage() {
   const items = useInventory((s) => s.items);
   const bins = useInventory((s) => s.bins);
+  const hydrated = useInventory((s) => s.hydrated);
   const addManual = useInventory((s) => s.addManual);
   const addBin = useInventory((s) => s.addBin);
   const loadSample = useInventory((s) => s.loadSample);
@@ -119,7 +120,7 @@ function InventoryPage() {
         <div className="rounded-xl bg-surface p-8 shadow-[var(--shadow-border)]">
           <p className="font-display text-2xl">Nothing filed yet</p>
           <p className="mt-2 text-sm text-muted">Scan a video, add a piece by hand, or load a sample lot.</p>
-          <Button className="mt-4" variant="secondary" onClick={loadSample}>
+          <Button className="mt-4" variant="secondary" onClick={loadSample} disabled={!hydrated}>
             Load sample lot
           </Button>
         </div>

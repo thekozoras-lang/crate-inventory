@@ -8,6 +8,7 @@ import { itemListPrice, useInventory } from "@/lib/store";
 export const Route = createFileRoute("/")({ component: Home });
 
 function Home() {
+  const hydrated = useInventory((s) => s.hydrated);
   const items = useInventory((s) => s.items);
   const bins = useInventory((s) => s.bins);
   const listings = useInventory((s) => s.listings);
@@ -44,7 +45,7 @@ function Home() {
               </Link>
             </Button>
             {items.length === 0 ? (
-              <Button variant="secondary" onClick={loadSample}>
+              <Button variant="secondary" onClick={loadSample} disabled={!hydrated}>
                 Load a sample lot
               </Button>
             ) : (
