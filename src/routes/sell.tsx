@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { ItemThumb } from "@/components/item-thumb";
 import { writeListings } from "@/lib/analyze";
+import { templateListings } from "@/lib/catalog";
 import { money, moneyExact } from "@/lib/money";
 import { itemLineTotal, itemListPrice, itemMarketTotal, useInventory } from "@/lib/store";
 import { FEE_PRESETS } from "@/lib/types";
@@ -46,29 +47,36 @@ function SellPage() {
     if (selected.length === 0) return;
     setWriting(true);
     try {
-      const result = await writeListings({
-        data: {
-          items: selected.slice(0, 12).map((item) => ({
-            id: item.id,
-            name: item.name,
-            category: item.category,
-            brand: item.brand,
-            condition: item.condition,
-            description: item.description,
-            listPrice: itemListPrice(item),
-            marketMid: item.marketMid,
-            percent: item.listingPercent,
-          })),
-        },
-      });
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
+      const payload = selected.slice(0, 12).map((item) => ({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        brand: item.brand,
+        condition: item.condition,
+        description: item.description,
+        listPrice: itemListPrice(item),
+        marketMid: item.marketMid,
+        percent: item.listingPercent,
+      }));
+      let listings = templateListings(payload);
+      let usedFallback = true;
+      try {
+        const result = await writeListings({ data: { items: payload } });
+        if (result.ok && result.listings.length > 0) {
+          listings = result.listings;
+          usedFallback = Boolean(result.fallback);
+        }
+      } catch {
+        usedFallback = true;
       }
       const prices: Record<string, number> = {};
       for (const item of selected) prices[item.id] = itemListPrice(item);
-      applyListings(result.listings, prices);
-      toast.success(`${result.listings.length} listings drafted`);
+      applyListings(listings, prices);
+      toast.success(
+        usedFallback
+          ? `${listings.length} listings drafted from your item details`
+          : `${listings.length} listings drafted`,
+      );
       setTab("live");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not write listings.");

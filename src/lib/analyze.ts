@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { templateListings } from "./catalog";
 import { CATEGORIES, CONDITIONS, type Condition, type DetectedItem } from "./types";
 import { uid } from "./utils";
 
@@ -112,19 +113,35 @@ async function grokChat(body: Record<string, unknown>): Promise<
   const apiKey = process.env.XAI_API_KEY;
   if (!apiKey) return { ok: false, error: "AI is not available in this environment." };
 
-  const res = await fetch("https://api.x.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model: "grok-4.5", ...body }),
-  });
+  let res: Response;
+  try {
+    res = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model: "grok-4.5", ...body }),
+      signal: AbortSignal.timeout(75_000),
+    });
+  } catch (error) {
+    const timedOut =
+      error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    return {
+      ok: false,
+      error: timedOut
+        ? "The cataloger timed out. Try fewer stills, or a shorter clip."
+        : "Could not reach the cataloger.",
+    };
+  }
 
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
+    await res.text().catch(() => "");
     if (res.status === 429) return { ok: false, error: "The cataloger is busy. Try again in a moment." };
-    return { ok: false, error: `Cataloger error (${res.status})${detail ? `: ${detail.slice(0, 180)}` : ""}` };
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: "The cataloger is offline. Name and price items from the stills." };
+    }
+    return { ok: false, error: "The cataloger is unavailable." };
   }
 
   const payload = (await res.json()) as {
@@ -222,7 +239,7 @@ export const writeListings = createServerFn({ method: "POST" })
     async ({
       data,
     }): Promise<
-      | { ok: true; listings: { id: string; title: string; body: string }[] }
+      | { ok: true; listings: { id: string; title: string; body: string }[]; fallback: boolean }
       | { ok: false; error: string }
     > => {
       const prompt = `Write marketplace listings (Facebook Marketplace / Craigslist / eBay style) for these items. Honest, specific, no hype, no emoji.
@@ -244,7 +261,9 @@ ${JSON.stringify(data.items, null, 2)}`;
         ],
       });
 
-      if (!result.ok) return result;
+      if (!result.ok) {
+        return { ok: true, listings: templateListings(data.items), fallback: true };
+      }
       const parsed = parseJsonObject(result.text);
       const rows = Array.isArray(parsed?.listings) ? parsed.listings : [];
       const listings = rows
@@ -260,8 +279,8 @@ ${JSON.stringify(data.items, null, 2)}`;
         .filter((row): row is { id: string; title: string; body: string } => row !== null);
 
       if (listings.length === 0) {
-        return { ok: false, error: "Could not draft listings. Try again with fewer items." };
+        return { ok: true, listings: templateListings(data.items), fallback: true };
       }
-      return { ok: true, listings };
+      return { ok: true, listings, fallback: false };
     },
   );

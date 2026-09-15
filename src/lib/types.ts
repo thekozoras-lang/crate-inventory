@@ -88,6 +88,7 @@ export type PendingScan = {
   frames: string[];
   scene: string;
   items: DetectedItem[];
+  autoCataloged: boolean;
 };
 
 export const FEE_PRESETS = [

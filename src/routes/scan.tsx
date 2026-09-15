@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Camera, ImagePlus, LoaderCircle } from "lucide-react";
+import { Camera, ExternalLink, ImagePlus, LoaderCircle, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,7 +8,8 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { analyzeScan } from "@/lib/analyze";
-import { extractVideoFrames, fileToJpegDataUrl, shrinkDataUrl } from "@/lib/frames";
+import { draftDetectedFromFrames, soldCompsUrl } from "@/lib/catalog";
+import { extractVideoFrames, fileToJpegDataUrl, isImageFile, isVideoFile, shrinkDataUrl } from "@/lib/frames";
 import { money } from "@/lib/money";
 import { useInventory } from "@/lib/store";
 import { uid } from "@/lib/utils";
@@ -22,6 +23,7 @@ function ScanPage() {
   const pendingScan = useInventory((s) => s.pendingScan);
   const setPendingScan = useInventory((s) => s.setPendingScan);
   const updateDetected = useInventory((s) => s.updateDetected);
+  const addDetected = useInventory((s) => s.addDetected);
   const commitScan = useInventory((s) => s.commitScan);
   const bins = useInventory((s) => s.bins);
   const addBin = useInventory((s) => s.addBin);
@@ -39,10 +41,10 @@ function ScanPage() {
   async function onFiles(list: FileList | null) {
     if (!list || list.length === 0) return;
     const files = [...list];
-    const videos = files.filter((f) => f.type.startsWith("video/"));
-    const images = files.filter((f) => f.type.startsWith("image/"));
+    const videos = files.filter(isVideoFile);
+    const images = files.filter(isImageFile);
     if (videos.length === 0 && images.length === 0) {
-      toast.error("Add a video or photos.");
+      toast.error("Add a video or JPEG/PNG photos.");
       return;
     }
 
@@ -50,34 +52,56 @@ function ScanPage() {
     setProgress(0);
     try {
       let frames: string[] = [];
-      if (videos[0]) {
-        setStatus("Pulling stills from the walkthrough…");
-        frames = await extractVideoFrames(videos[0], 6, (done, total) => {
-          setProgress(Math.round((done / total) * 100));
-        });
-      } else {
-        setStatus("Preparing photos…");
+
+      if (images.length > 0) {
         const limited = images.slice(0, 6);
         for (let i = 0; i < limited.length; i++) {
-          frames.push(await fileToJpegDataUrl(limited[i]));
+          setStatus(`Opening still ${i + 1} of ${limited.length}…`);
+          try {
+            frames.push(await fileToJpegDataUrl(limited[i]));
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Skipped a photo that wouldn’t open.");
+          }
           setProgress(Math.round(((i + 1) / limited.length) * 100));
         }
       }
 
-      setBusy("analyze");
-      setStatus("Identifying pieces and pricing them…");
-      setProgress(70);
-      const result = await analyzeScan({ data: { frames, notes: notes.trim() || undefined } });
-      if (!result.ok) {
-        toast.error(result.error);
-        setBusy(null);
-        setStatus("");
-        return;
+      if (frames.length === 0 && videos[0]) {
+        setStatus("Pulling stills from the walkthrough…");
+        frames = await extractVideoFrames(videos[0], 6, (done, total) => {
+          setStatus(`Pulling still ${done} of ${total}…`);
+          setProgress(Math.round((done / total) * 100));
+        });
       }
 
+      if (frames.length === 0) {
+        throw new Error("No stills could be opened. Use JPEG or PNG photos, or a short MP4.");
+      }
+
+      setBusy("analyze");
+      setStatus("Identifying pieces and pricing them…");
+      setProgress(80);
+
       const thumbs = await Promise.all(frames.map((f) => shrinkDataUrl(f, 480, 0.55)));
+      let scene = notes.trim() || "Walkthrough";
+      let items = draftDetectedFromFrames(thumbs.length);
+      let autoCataloged = false;
+
+      try {
+        const result = await analyzeScan({ data: { frames, notes: notes.trim() || undefined } });
+        if (result.ok) {
+          items = result.items;
+          scene = result.scene;
+          autoCataloged = true;
+        } else {
+          toast.message("Auto-catalog is offline. Name and price each still, then put them in storage.");
+        }
+      } catch {
+        toast.message("Auto-catalog is offline. Name and price each still, then put them in storage.");
+      }
+
       const nextBins = { ...binMap };
-      for (const item of result.items) {
+      for (const item of items) {
         const suggested = item.suggestedBin.toLowerCase();
         const match = bins.find(
           (b) =>
@@ -90,10 +114,11 @@ function ScanPage() {
         id: uid("scan"),
         createdAt: Date.now(),
         frames: thumbs,
-        scene: result.scene,
-        items: result.items,
+        scene,
+        items,
+        autoCataloged,
       });
-      toast.success(`${result.items.length} items cataloged`);
+      if (autoCataloged) toast.success(`${items.length} items cataloged`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Scan failed.");
     } finally {
@@ -116,8 +141,8 @@ function ScanPage() {
         <p className="text-xs font-medium tracking-widest text-muted uppercase">Scan desk</p>
         <h1 className="font-display text-4xl tracking-tight">Walk the camera through it</h1>
         <p className="max-w-xl text-muted">
-          A short video of a shelf, garage, or table — or up to six stills. Crate extracts frames,
-          names each piece, and prices it from typical online listings.
+          A short video of a shelf, garage, or table — or up to six JPEG/PNG stills. Crate names
+          each piece and prices it from typical online listings.
         </p>
       </header>
 
@@ -149,7 +174,7 @@ function ScanPage() {
             </span>
             <div>
               <p className="font-medium">Drop a video or stills</p>
-              <p className="text-sm text-muted">MP4, MOV, or JPEG/PNG. A slow pan works better than a blur.</p>
+              <p className="text-sm text-muted">MP4 or JPEG/PNG. Pause two seconds on each piece.</p>
             </div>
           </div>
           <Button
@@ -196,20 +221,34 @@ function ScanPage() {
               <Button variant="ghost" onClick={() => setPendingScan(null)}>
                 Discard
               </Button>
+              <Button variant="secondary" onClick={() => addDetected(0)}>
+                <Plus className="size-4" />
+                Add item
+              </Button>
               <Button onClick={commit} disabled={kept.length === 0}>
                 Put in storage
               </Button>
             </div>
           </div>
 
+          {!pendingScan.autoCataloged ? (
+            <p className="rounded-lg bg-elevated px-4 py-3 text-sm text-muted">
+              Auto-catalog is offline. Name each piece, set a mid-market price from sold listings, then
+              store it. Click a still to add another item from that frame.
+            </p>
+          ) : null}
+
           <div className="flex gap-2 overflow-x-auto pb-1">
             {pendingScan.frames.map((frame, i) => (
-              <img
+              <button
                 key={i}
-                src={frame}
-                alt={`Frame ${i + 1}`}
-                className="h-16 w-24 shrink-0 rounded-md object-cover"
-              />
+                type="button"
+                className="shrink-0"
+                onClick={() => addDetected(i)}
+                title={`Add item from still ${i + 1}`}
+              >
+                <img src={frame} alt={`Frame ${i + 1}`} className="h-16 w-24 rounded-md object-cover" />
+              </button>
             ))}
           </div>
 
@@ -232,10 +271,22 @@ function ScanPage() {
                       aria-label={`Keep ${item.name}`}
                     />
                     <div className="grid min-w-0 flex-1 gap-2">
-                      <Input
-                        value={item.name}
-                        onChange={(e) => updateDetected(item.key, { name: e.target.value })}
-                      />
+                      <div className="flex gap-2">
+                        <Input
+                          value={item.name}
+                          onChange={(e) => updateDetected(item.key, { name: e.target.value })}
+                          placeholder="What is it?"
+                        />
+                        <a
+                          href={soldCompsUrl(item.name)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex h-10 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-muted hover:text-fg"
+                        >
+                          <ExternalLink className="size-3.5" />
+                          Sold comps
+                        </a>
+                      </div>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <Select
                           value={item.category}
@@ -274,6 +325,7 @@ function ScanPage() {
                           min={1}
                           className="h-9"
                           value={item.quantity}
+                          placeholder="Qty"
                           onChange={(e) =>
                             updateDetected(item.key, {
                               quantity: Math.max(1, Number(e.target.value) || 1),
@@ -282,11 +334,18 @@ function ScanPage() {
                         />
                         <Input
                           type="number"
+                          min={0}
                           className="h-9"
-                          value={item.marketMid}
-                          onChange={(e) =>
-                            updateDetected(item.key, { marketMid: Number(e.target.value) || 0 })
-                          }
+                          value={item.marketMid || ""}
+                          placeholder="Price"
+                          onChange={(e) => {
+                            const mid = Math.max(0, Number(e.target.value) || 0);
+                            updateDetected(item.key, {
+                              marketMid: mid,
+                              marketLow: Math.round(mid * 0.7),
+                              marketHigh: Math.round(mid * 1.3),
+                            });
+                          }}
                         />
                       </div>
                       <p className="text-xs text-muted">{item.priceBasis}</p>

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { DetectedItem, InventoryItem, Listing, PendingScan, StorageBin } from "./types";
+import { blankDetected } from "./catalog";
 import { DEFAULT_BINS, makeSampleLot } from "./sample-lot";
 import { clampPercent, lineListPrice } from "./money";
 import { uid } from "./utils";
@@ -18,6 +19,8 @@ type InventoryState = {
   loadSample: () => void;
   setPendingScan: (scan: PendingScan | null) => void;
   updateDetected: (key: string, patch: Partial<DetectedItem>) => void;
+  addDetected: (frameIndex?: number) => void;
+  removeDetected: (key: string) => void;
   commitScan: (storageFor: Record<string, string>) => InventoryItem[];
   addManual: (item: Omit<InventoryItem, "id" | "createdAt" | "source" | "status">) => string;
   updateItem: (id: string, patch: Partial<InventoryItem>) => void;
@@ -74,6 +77,28 @@ export const useInventory = create<InventoryState>()(
               items: state.pendingScan.items.map((item) =>
                 item.key === key ? { ...item, ...patch } : item,
               ),
+            },
+          };
+        }),
+      addDetected: (frameIndex) =>
+        set((state) => {
+          if (!state.pendingScan) return state;
+          const last = state.pendingScan.frames.length - 1;
+          const index = Math.max(0, Math.min(frameIndex ?? 0, Math.max(0, last)));
+          return {
+            pendingScan: {
+              ...state.pendingScan,
+              items: [...state.pendingScan.items, blankDetected(index)],
+            },
+          };
+        }),
+      removeDetected: (key) =>
+        set((state) => {
+          if (!state.pendingScan) return state;
+          return {
+            pendingScan: {
+              ...state.pendingScan,
+              items: state.pendingScan.items.filter((item) => item.key !== key),
             },
           };
         }),
