@@ -157,6 +157,12 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  ssr: {
+    external: ["@tensorflow/tfjs", "@tensorflow-models/coco-ssd"],
+  },
+  optimizeDeps: {
+    include: ["@tensorflow/tfjs", "@tensorflow-models/coco-ssd"],
+  },
   plugins: [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.

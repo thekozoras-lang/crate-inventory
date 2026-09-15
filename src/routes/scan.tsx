@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Camera, ExternalLink, ImagePlus, LoaderCircle, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -7,8 +7,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Textarea } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { analyzeScan } from "@/lib/analyze";
+import { analyzeScan, getAiStatus } from "@/lib/analyze";
 import { draftDetectedFromFrames, soldCompsUrl } from "@/lib/catalog";
+import { catalogFrames, warmupDetector } from "@/lib/detect";
 import { extractVideoFrames, fileToJpegDataUrl, isImageFile, isVideoFile, shrinkDataUrl } from "@/lib/frames";
 import { money } from "@/lib/money";
 import { useInventory } from "@/lib/store";
@@ -34,6 +35,10 @@ function ScanPage() {
   const [status, setStatus] = useState("");
   const [binMap, setBinMap] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    warmupDetector();
+  }, []);
 
   const kept = pendingScan?.items.filter((i) => i.keep) ?? [];
   const keptValue = kept.reduce((s, i) => s + i.marketMid * i.quantity, 0);
@@ -86,18 +91,47 @@ function ScanPage() {
       let scene = notes.trim() || "Walkthrough";
       let items = draftDetectedFromFrames(thumbs.length);
       let autoCataloged = false;
+      let catalogSource: "cloud" | "device" | "manual" = "manual";
 
+      let cloudLive = false;
       try {
-        const result = await analyzeScan({ data: { frames, notes: notes.trim() || undefined } });
-        if (result.ok) {
-          items = result.items;
-          scene = result.scene;
-          autoCataloged = true;
-        } else {
-          toast.message("Auto-catalog is offline. Name and price each still, then put them in storage.");
-        }
+        const status = await getAiStatus();
+        cloudLive = Boolean(status.available);
       } catch {
-        toast.message("Auto-catalog is offline. Name and price each still, then put them in storage.");
+        cloudLive = false;
+      }
+
+      if (cloudLive) {
+        try {
+          const result = await analyzeScan({ data: { frames, notes: notes.trim() || undefined } });
+          if (result.ok) {
+            items = result.items;
+            scene = result.scene;
+            autoCataloged = true;
+            catalogSource = "cloud";
+          }
+        } catch {
+          // Fall through to on-device cataloging.
+        }
+      }
+
+      if (!autoCataloged) {
+        setStatus("Identifying pieces on this device…");
+        setProgress(85);
+        try {
+          const local = await catalogFrames(thumbs, (done, total) => {
+            setStatus(`Identifying still ${done} of ${total}…`);
+            setProgress(85 + Math.round((done / total) * 10));
+          });
+          if (local.items.length > 0) {
+            items = local.items;
+            scene = notes.trim() || local.scene;
+            autoCataloged = true;
+            catalogSource = "device";
+          }
+        } catch {
+          catalogSource = "manual";
+        }
       }
 
       const nextBins = { ...binMap };
@@ -117,8 +151,12 @@ function ScanPage() {
         scene,
         items,
         autoCataloged,
+        catalogSource,
       });
-      if (autoCataloged) toast.success(`${items.length} items cataloged`);
+      if (catalogSource === "cloud") toast.success(`${items.length} items cataloged`);
+      else if (catalogSource === "device")
+        toast.success(`${items.length} items spotted from the stills`);
+      else toast.message("Couldn’t name pieces automatically. Name and price each still.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Scan failed.");
     } finally {
@@ -231,9 +269,15 @@ function ScanPage() {
             </div>
           </div>
 
-          {!pendingScan.autoCataloged ? (
+          {pendingScan.catalogSource === "device" ? (
             <p className="rounded-lg bg-elevated px-4 py-3 text-sm text-muted">
-              Auto-catalog is offline. Name each piece, set a mid-market price from sold listings, then
+              Spotted from the stills on this device. Prices are typical used ranges — open sold
+              comps, then uncheck anything that isn’t for sale.
+            </p>
+          ) : null}
+          {pendingScan.catalogSource === "manual" ? (
+            <p className="rounded-lg bg-elevated px-4 py-3 text-sm text-muted">
+              Couldn’t name pieces automatically. Name each still, set a mid-market price, then
               store it. Click a still to add another item from that frame.
             </p>
           ) : null}

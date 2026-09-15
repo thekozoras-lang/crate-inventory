@@ -82,6 +82,8 @@ export type DetectedItem = {
   keep: boolean;
 };
 
+export type CatalogSource = "cloud" | "device" | "manual";
+
 export type PendingScan = {
   id: string;
   createdAt: number;
@@ -89,6 +91,7 @@ export type PendingScan = {
   scene: string;
   items: DetectedItem[];
   autoCataloged: boolean;
+  catalogSource: CatalogSource;
 };
 
 export const FEE_PRESETS = [

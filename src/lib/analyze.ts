@@ -121,7 +121,7 @@ async function grokChat(body: Record<string, unknown>): Promise<
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ model: "grok-4.5", ...body }),
+      body: JSON.stringify({ model: "grok-4-fast-non-reasoning", ...body }),
       signal: AbortSignal.timeout(75_000),
     });
   } catch (error) {
@@ -153,7 +153,27 @@ async function grokChat(body: Record<string, unknown>): Promise<
 }
 
 export const getAiStatus = createServerFn({ method: "POST" }).handler(async () => {
-  return { available: Boolean(process.env.XAI_API_KEY) };
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) return { available: false };
+  try {
+    const res = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "grok-4-fast-non-reasoning",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "ok" }],
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    await res.text().catch(() => "");
+    return { available: res.ok };
+  } catch {
+    return { available: false };
+  }
 });
 
 export const analyzeScan = createServerFn({ method: "POST" })
